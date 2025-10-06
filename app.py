@@ -16,7 +16,7 @@ def main():
     # Page configuration
     st.set_page_config(
         page_title="Instagram Reel Downloader",
-        page_icon="📱",
+        page_icon="♟",
         layout="centered"
     )
     
@@ -72,7 +72,7 @@ def main():
     """, unsafe_allow_html=True)
     
     # Header section
-    st.markdown('<div class="main-header">📱 Instagram Reel Downloader</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header"> Instagram Reel Downloader</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-header">Download Instagram Reels as MP4 files instantly</div>', unsafe_allow_html=True)
     
     # URL input section without paste button
