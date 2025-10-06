@@ -149,6 +149,8 @@ import os
 import uuid
 import time
 from datetime import datetime, timedelta
+import requests
+import json
 
 # Initialize session state for download tracking
 if 'download_count' not in st.session_state:
@@ -157,27 +159,86 @@ if 'last_reset_time' not in st.session_state:
     st.session_state.last_reset_time = datetime.now()
 if 'cooldown_until' not in st.session_state:
     st.session_state.cooldown_until = None
+if 'user_agent' not in st.session_state:
+    st.session_state.user_agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1"
 
-def download_video(url, output_path):
-    # Cookie file path - you'll need to provide this
-    # You can get cookies by exporting from your browser
-    cookie_file = "cookies.txt"  # Create this file with your Instagram cookies
+def get_random_user_agent():
+    """Return a random mobile user agent to avoid detection"""
+    user_agents = [
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1",
+        "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36",
+        "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1"
+    ]
+    import random
+    return random.choice(user_agents)
+
+def download_video(url, output_path, use_cookies=False):
+    """Download video with multiple fallback methods"""
     
+    # Base options
     ydl_opts = {
-        'format': 'mp4',
+        'format': 'best[height<=720]',  # Limit to 720p to reduce detection
         'outtmpl': output_path,
-        'quiet': True,
-        'no_warnings': True,
+        'quiet': False,
+        'no_warnings': False,
+        'sleep_interval': 2,  # Add delay between requests
+        'max_sleep_interval': 5,
+        'user_agent': get_random_user_agent(),
+        'extracter_retries': 3,
+        'retries': 3,
+        'fragment_retries': 3,
+        'skip_unavailable_fragments': True,
+        'ignoreerrors': True,
     }
     
-    # Add cookies if the file exists
-    if os.path.exists(cookie_file):
-        ydl_opts['cookiesfrombrowser'] = ('chrome',)  # or 'firefox', 'edge', etc.
-    else:
-        st.warning("⚠️ Using without cookies - may encounter rate limits")
+    # Method 1: Try with browser cookies first
+    if use_cookies:
+        try:
+            # Try different browsers
+            for browser in ['chrome', 'firefox', 'edge', 'safari']:
+                try:
+                    ydl_opts['cookiesfrombrowser'] = (browser,)
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
+                    return True
+                except:
+                    continue
+        except:
+            pass
     
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    # Method 2: Try with custom headers (mobile emulation)
+    ydl_opts.update({
+        'http_headers': {
+            'User-Agent': get_random_user_agent(),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        }
+    })
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        return True
+    except:
+        pass
+    
+    # Method 3: Try without any special options as last resort
+    try:
+        basic_opts = {
+            'format': 'best[height<=720]',
+            'outtmpl': output_path,
+            'quiet': True,
+        }
+        with yt_dlp.YoutubeDL(basic_opts) as ydl:
+            ydl.download([url])
+        return True
+    except Exception as e:
+        raise e
 
 def can_download():
     """Check if user can download based on limits"""
@@ -249,9 +310,6 @@ def main():
         cursor: pointer;
         width: 100%;
     }
-    .download-btn:hover {
-        background-color: #C13584;
-    }
     .success-msg {
         padding: 1rem;
         border-radius: 5px;
@@ -281,6 +339,13 @@ def main():
         margin-bottom: 1rem;
         text-align: center;
     }
+    .cookie-section {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 5px;
+        border-left: 4px solid #E1306C;
+        margin-bottom: 1rem;
+    }
     </style>
     """, unsafe_allow_html=True)
     
@@ -295,6 +360,22 @@ def main():
     {f"⏰ Cooldown: {get_cooldown_time_remaining()} remaining" if st.session_state.cooldown_until else ""}
     </div>
     """, unsafe_allow_html=True)
+    
+    # Cookie configuration section
+    st.markdown("### 🔧 Authentication Setup (Required)")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        use_cookies = st.checkbox("Use Browser Cookies", value=True, 
+                                 help="Automatically use cookies from your browser")
+        
+    with col2:
+        browser_type = st.selectbox(
+            "Select Browser",
+            ["chrome", "firefox", "edge", "safari"],
+            help="Select the browser where you're logged into Instagram"
+        )
     
     # URL input section
     st.markdown("### Enter Instagram Reel URL")
@@ -330,66 +411,95 @@ def main():
     
     # Handle download process
     if download_clicked and url and can_download_result:
-        if not ("instagram.com" in url and "/reel/" in url):
-            st.error("Please enter a valid Instagram Reel URL")
+        if not ("instagram.com" in url):
+            st.error("❌ Please enter a valid Instagram URL")
         else:
             unique_id = str(uuid.uuid4())
             output_path = f"downloaded_video_{unique_id}.mp4"
             
             try:
                 with st.spinner("🔄 Downloading your reel... This may take a few moments."):
-                    download_video(url, output_path)
+                    # Set cookies option based on user selection
+                    download_success = download_video(url, output_path, use_cookies=use_cookies)
                 
-                # Update download count
-                update_download_count()
-                
-                st.success("✅ Download completed successfully!")
-                
-                # Display download button for the file
-                with open(output_path, "rb") as f:
-                    video_bytes = f.read()
-                
-                st.download_button(
-                    label="💾 Save MP4 File",
-                    data=video_bytes,
-                    file_name=f"instagram_reel_{unique_id}.mp4",
-                    mime="video/mp4",
-                    use_container_width=True
-                )
-                
-                # Show remaining downloads
-                remaining_downloads = 3 - st.session_state.download_count
-                if remaining_downloads > 0:
-                    st.info(f"📊 You have {remaining_downloads} download(s) remaining in this 2-hour period.")
+                if download_success and os.path.exists(output_path):
+                    # Update download count
+                    update_download_count()
+                    
+                    st.success("✅ Download completed successfully!")
+                    
+                    # Display download button for the file
+                    with open(output_path, "rb") as f:
+                        video_bytes = f.read()
+                    
+                    st.download_button(
+                        label="💾 Save MP4 File",
+                        data=video_bytes,
+                        file_name=f"instagram_reel_{unique_id}.mp4",
+                        mime="video/mp4",
+                        use_container_width=True
+                    )
+                    
+                    # Show remaining downloads
+                    remaining_downloads = 3 - st.session_state.download_count
+                    if remaining_downloads > 0:
+                        st.info(f"📊 You have {remaining_downloads} download(s) remaining in this 2-hour period.")
+                    else:
+                        st.warning("⚠️ You've reached your download limit for the next 2 hours.")
+                    
+                    # Clean up the temporary file
+                    try:
+                        os.remove(output_path)
+                    except:
+                        pass
                 else:
-                    st.warning("⚠️ You've reached your download limit for the next 2 hours.")
-                
-                # Clean up the temporary file
-                try:
-                    os.remove(output_path)
-                except:
-                    pass
+                    st.error("❌ Download failed. The video might be private or unavailable.")
                     
             except Exception as e:
-                st.error(f"❌ Error downloading video: {str(e)}")
-                st.info("💡 Tips: Make sure the URL is correct and the reel is publicly accessible")
+                error_msg = str(e)
+                st.error(f"❌ Error downloading video: {error_msg}")
+                
+                # Provide specific solutions based on error type
+                if "rate-limit" in error_msg.lower() or "login required" in error_msg.lower():
+                    st.markdown("""
+                    **🔧 Quick Fixes:**
+                    
+                    1. **Make sure you're logged into Instagram in your browser**
+                    2. **Try selecting a different browser in the settings above**
+                    3. **Wait a few minutes and try again**
+                    4. **Ensure the reel is public and accessible**
+                    """)
+                else:
+                    st.info("💡 Tips: Make sure the URL is correct and the reel is publicly accessible")
 
-    # Instructions for cookies
-    with st.expander("🔧 Having rate limit issues? Get better performance:"):
+    # Comprehensive troubleshooting guide
+    with st.expander("🚨 Still having issues? Click here for detailed solutions"):
         st.markdown("""
-        **To reduce rate limiting:**
+        ### **Complete Solution Guide**
         
-        1. **Export cookies from your browser:**
-           - Install a cookie export extension
-           - Export Instagram cookies as `cookies.txt`
-           - Upload the file to your app directory
+        **Method 1: Browser Cookies (Recommended)**
+        - Make sure you're logged into Instagram in Chrome/Firefox/Edge
+        - Select the correct browser type in the settings above
+        - Keep "Use Browser Cookies" checked
         
-        2. **Or use cookies automatically:**
-           ```python
-           ydl_opts['cookiesfrombrowser'] = ('chrome',)  # or 'firefox'
-           ```
+        **Method 2: Manual Cookie Export**
+        ```bash
+        # Install cookie export extension
+        # Export Instagram cookies as cookies.txt
+        # Upload to your app directory
+        ```
         
-        This helps Instagram recognize you as a logged-in user.
+        **Method 3: Alternative Approaches**
+        - Try different reel URLs
+        - Use mobile user agents
+        - Add delays between requests
+        - Use residential proxies (for advanced users)
+        
+        **Common Issues:**
+        - Private accounts cannot be downloaded
+        - Age-restricted content may be blocked
+        - Regional restrictions may apply
+        - Instagram frequently changes their API
         """)
 
     # Footer
