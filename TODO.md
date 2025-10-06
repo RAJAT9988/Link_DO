@@ -1,0 +1,4 @@
+- [x] Remove pyperclip import from app.py
+- [x] Remove paste button UI and related logic from app.py
+- [x] Simplify URL input to single column
+- [x] Test the app runs without errors
